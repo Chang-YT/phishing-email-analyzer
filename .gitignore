@@ -1,0 +1,22 @@
+# Virtual environment
+venv/
+env/
+__pycache__/
+*.pyc
+
+# Real email samples and any extracted attachments - never commit these.
+# Some contain links to live malicious infrastructure or real malware.
+# Download samples locally from malware-traffic-analysis.net as needed.
+samples/
+*.eml
+*.zip
+*.7z
+*.xz
+*.rar
+*.gz
+*.tar
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
