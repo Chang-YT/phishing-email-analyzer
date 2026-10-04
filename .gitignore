@@ -4,9 +4,13 @@ env/
 __pycache__/
 *.pyc
 
-# Real email samples and any extracted attachments - never commit these.
-# Some contain links to live malicious infrastructure or real malware.
-# Download samples locally from malware-traffic-analysis.net as needed.
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# here are real email samples and extracted attachments - never commit !!
+# download samples into your local machine if needed
 samples/
 *.eml
 *.zip
@@ -15,8 +19,3 @@ samples/
 *.rar
 *.gz
 *.tar
-
-# OS/editor noise
-.DS_Store
-Thumbs.db
-.vscode/

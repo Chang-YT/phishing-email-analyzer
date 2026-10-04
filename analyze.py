@@ -1,34 +1,25 @@
-"""
-Phishing Email Analyzer - Step 1
-Parses a raw .eml file and extracts headers, auth results, and basic IOCs.
-
-Usage:
-    python analyze.py sample.eml
-"""
-
 import sys
 import os
 import re
+import hashlib
 import email
 from email import policy
 from email.parser import BytesParser
+from urllib.parse import urlparse, parse_qs, unquote
 
 import tldextract
 
 
 def load_email(filepath):
-    """Load and parse a raw .eml file."""
     with open(filepath, "rb") as f:
         msg = BytesParser(policy=policy.default).parse(f)
     return msg
 
 
 def get_body_parts(msg):
-    """
-    Return both the plain-text body and the raw (untouched) HTML body, if present.
-    We keep HTML raw (tags intact) so link extraction can see href="..." values
-    before anything strips the tags away.
-    """
+ 
+    #Return plain-text body and the raw HTML body keeping tags in HTML so link extraction can see href="..." values
+
     plain_text = ""
     raw_html = ""
 
@@ -55,32 +46,28 @@ def get_body_parts(msg):
 
 
 def strip_html_tags(html):
-    """Crude tag strip, for reading visible text / keyword scanning only.
-    Do NOT use this before URL extraction - it destroys href attributes."""
+    #Do NOT use this before URL extraction - it will destroy the href attribute!!
     return re.sub("<[^<]+?>", " ", html)
 
 
 def extract_urls(plain_text, raw_html):
-    """
-    Find URLs from both the plain-text body and the raw HTML body.
-    Checks href="..." / src="..." attributes specifically, since a generic
-    http(s):// scan misses nothing there, but stripping tags first would.
-    """
+    #find URLs from both plain-text body and raw HTML body
+
     url_pattern = r"https?://[^\s\"'<>]+"
     urls = set(re.findall(url_pattern, plain_text))
 
     if raw_html:
-        # Catches URLs sitting inside href="..." or src="..." attributes
+        # catch URL inside href="..." src="..." 
         href_pattern = r'(?:href|src)\s*=\s*["\']?(https?://[^"\'\s>]+)'
         urls.update(re.findall(href_pattern, raw_html, re.IGNORECASE))
-        # Also catch any bare URLs written directly in the HTML text
+        # catch URs written directly in the HTML text
         urls.update(re.findall(url_pattern, raw_html))
 
     return list(urls)
 
 
 def parse_auth_results(msg):
-    """Pull SPF/DKIM/DMARC verdicts out of Authentication-Results header."""
+    #SPF/DKIM/DMARC
     auth_header = msg.get("Authentication-Results", "")
     results = {"spf": None, "dkim": None, "dmarc": None}
 
@@ -93,7 +80,6 @@ def parse_auth_results(msg):
 
 
 def get_sender_ip(msg):
-    """Grab the first (topmost/most recent) Received header and pull an IP out."""
     received_headers = msg.get_all("Received", [])
     if not received_headers:
         return None
@@ -104,7 +90,7 @@ def get_sender_ip(msg):
 
 
 def extract_domains(urls):
-    """Extract root domains from a list of URLs."""
+    # root domains
     domains = []
     for url in urls:
         ext = tldextract.extract(url)
@@ -113,13 +99,53 @@ def extract_domains(urls):
     return list(set(domains))
 
 
+def unwrap_redirect(url):
+    #try to reveal the real destination behind a known wrapper/redirect URL
+    parsed = urlparse(url)
+    netloc = parsed.netloc.lower()
+
+    # Google redirect wrapper
+    if "google.com" in netloc and parsed.path == "/url":
+        qs = parse_qs(parsed.query)
+        if "q" in qs:
+            return unquote(qs["q"][0])
+
+    # Cisco Secure Web Gateway
+    if "secure-web.cisco.com" in netloc:
+        path_parts = parsed.path.strip("/").split("/")
+        if path_parts:
+            candidate = unquote(unquote(path_parts[-1]))
+            if candidate.startswith("http"):
+                return candidate
+
+    # googleusercontent proxy image
+    if "googleusercontent.com" in netloc and "#http" in url:
+        return url.split("#", 1)[1]
+
+    return None
+
+
+def unwrap_all_urls(urls):
+    # return list of original and unwrapped URLs
+    all_urls = set(urls)
+    unwrapped_pairs = []
+
+    for url in urls:
+        real = unwrap_redirect(url)
+        if real and real not in all_urls:
+            all_urls.add(real)
+            unwrapped_pairs.append((url, real))
+
+    return list(all_urls), unwrapped_pairs
+
+
 def check_from_reply_mismatch(msg):
-    """Flag if From and Reply-To domains differ."""
+    # flag if From and Reply-To domains diff
     from_addr = msg.get("From", "")
     reply_to = msg.get("Reply-To", "")
 
     if not reply_to:
-        return False  # no reply-to set, nothing to compare
+        return False  # no reply-to set
 
     from_match = re.search(r"@([\w.-]+)", from_addr)
     reply_match = re.search(r"@([\w.-]+)", reply_to)
@@ -130,7 +156,7 @@ def check_from_reply_mismatch(msg):
 
 
 def check_urgency_language(text):
-    """Simple keyword check for common phishing urgency phrases."""
+    #common phishing urgency phrase
     keywords = [
         "verify your account", "act now", "suspended", "urgent",
         "confirm your identity", "click here immediately", "unusual activity",
@@ -142,7 +168,7 @@ def check_urgency_language(text):
 
 
 def get_attachments(msg):
-    """List attachment filenames (does not open/extract contents)."""
+    # list out attached file names
     attachments = []
     if msg.is_multipart():
         for part in msg.walk():
@@ -152,21 +178,36 @@ def get_attachments(msg):
     return attachments
 
 
+def get_attachment_hashes(msg):
+    # calculate a SHA-256 hash for every email attachment, report for IOC (Indicator of Compromise)
+    results = []
+    if msg.is_multipart():
+        for part in msg.walk():
+            filename = part.get_filename()
+            if not filename:
+                continue
+            try:
+                payload = part.get_payload(decode=True)
+                sha256 = hashlib.sha256(payload).hexdigest() if payload else None
+            except Exception:
+                sha256 = None
+            results.append({"filename": filename, "sha256": sha256})
+    return results
+
+
 RISKY_ATTACHMENT_EXTENSIONS = (
     ".exe", ".scr", ".js", ".vbs", ".vbe", ".bat", ".cmd", ".ps1",
     ".jar", ".msi", ".hta", ".wsf", ".lnk", ".iso", ".img",
-    # Archive formats are a very common phishing delivery method,
-    # since they often hide the real payload from basic mail filters
     ".zip", ".rar", ".7z", ".xz", ".gz", ".tar", ".cab", ".ace",
+    # archive files can hide payload from mail filter
 )
 
 
 def calculate_risk_score(auth_results, mismatch, urgency_hits, domains, attachments):
-    """Weighted scoring, tuned against real phishing/malspam samples."""
     score = 0
     reasons = []
 
-    # SPF: fail is worse than softfail, but both are signals
+    # SPF: server sending the email is authorized or not
     if auth_results["spf"] == "fail":
         score += 25
         reasons.append("SPF check failed")
@@ -174,7 +215,7 @@ def calculate_risk_score(auth_results, mismatch, urgency_hits, domains, attachme
         score += 15
         reasons.append("SPF check soft-failed (server not fully authorized)")
 
-    # DKIM: an outright fail is bad, but no signature at all is also suspicious
+    # DKIM: message was authorized by the domain and wasn't modified? no signature is also suspicious 
     if auth_results["dkim"] == "fail":
         score += 25
         reasons.append("DKIM check failed")
@@ -182,6 +223,7 @@ def calculate_risk_score(auth_results, mismatch, urgency_hits, domains, attachme
         score += 10
         reasons.append("No DKIM signature present")
 
+    #DMARC: domain in the visible 'From' address same with results SPF/DKIM?
     if auth_results["dmarc"] == "fail":
         score += 20
         reasons.append("DMARC check failed")
@@ -194,11 +236,11 @@ def calculate_risk_score(auth_results, mismatch, urgency_hits, domains, attachme
         score += 10
         reasons.append(f"Urgency language detected: {urgency_hits}")
 
+    # check top-level domain (TLD)
     if any(d.split(".")[-1] in ("xyz", "tk", "top", "click") for d in domains):
         score += 15
         reasons.append("Suspicious top-level domain in links")
 
-    # Attachments: presence alone is worth noting, risky extensions much more so
     if attachments:
         risky = [
             a for a in attachments
@@ -222,7 +264,7 @@ def calculate_risk_score(auth_results, mismatch, urgency_hits, domains, attachme
 
 
 def analyze_file(filepath):
-    """Run the full analysis on one .eml file. Returns (filepath, score, verdict) for summaries."""
+    #full analyse
     try:
         msg = load_email(filepath)
     except Exception as e:
@@ -233,16 +275,16 @@ def analyze_file(filepath):
     print(f"ANALYZING: {filepath}")
     print("=" * 60)
 
-    # Basic headers
+    # headers
     print(f"\nFrom:      {msg.get('From')}")
     print(f"Reply-To:  {msg.get('Reply-To')}")
     print(f"Subject:   {msg.get('Subject')}")
 
-    # Sender IP
+    # sender's IP
     sender_ip = get_sender_ip(msg)
     print(f"\nSender IP (from Received header): {sender_ip}")
 
-    # Auth results
+    # auth results
     auth_results = parse_auth_results(msg)
     print(f"\nSPF:   {auth_results['spf']}")
     print(f"DKIM:  {auth_results['dkim']}")
@@ -252,21 +294,28 @@ def analyze_file(filepath):
     mismatch = check_from_reply_mismatch(msg)
     print(f"\nFrom/Reply-To mismatch: {mismatch}")
 
-    # Body + URLs (now checks both plain-text and raw HTML, since links
-    # often live inside href="..." attributes that used to get stripped away)
     plain_text, raw_html = get_body_parts(msg)
     urls = extract_urls(plain_text, raw_html)
-    domains = extract_domains(urls)
+
+    # real destination
+    all_urls, unwrapped_pairs = unwrap_all_urls(urls)
+    domains = extract_domains(all_urls)
 
     print(f"\nURLs found ({len(urls)}):")
     for u in urls:
         print(f"  - {u}")
 
+    if unwrapped_pairs:
+        print(f"\nRedirects unwrapped ({len(unwrapped_pairs)}):")
+        for original, real in unwrapped_pairs:
+            print(f"  - {original[:70]}...")
+            print(f"    -> real destination: {real}")
+
     print(f"\nDomains extracted ({len(domains)}):")
     for d in domains:
         print(f"  - {d}")
 
-    # Urgency language - check subject, plain text, and visible HTML text
+    # urgency language check
     subject = msg.get("Subject", "") or ""
     visible_html_text = strip_html_tags(raw_html) if raw_html else ""
     urgency_hits = list(set(
@@ -276,12 +325,14 @@ def analyze_file(filepath):
     ))
     print(f"\nUrgency phrases found: {urgency_hits}")
 
-    # Attachments
+    # attachment
     attachments = get_attachments(msg)
+    attachment_hashes = get_attachment_hashes(msg)
     print(f"\nAttachments found ({len(attachments)}):")
-    for a in attachments:
-        flag = " [RISKY TYPE]" if a.lower().endswith(RISKY_ATTACHMENT_EXTENSIONS) else ""
-        print(f"  - {a}{flag}")
+    for a in attachment_hashes:
+        flag = " [RISKY TYPE]" if a["filename"].lower().endswith(RISKY_ATTACHMENT_EXTENSIONS) else ""
+        print(f"  - {a['filename']}{flag}")
+        print(f"    SHA256: {a['sha256']}")
 
     # Risk score
     score, verdict, reasons = calculate_risk_score(
@@ -294,7 +345,7 @@ def analyze_file(filepath):
     for r in reasons:
         print(f"  - {r}")
     print("=" * 60)
-    print()  # blank line to separate reports in batch mode
+    print()  # blank line - separate report in batch search
 
     return (filepath, score, verdict)
 
@@ -333,12 +384,12 @@ def main():
         filepath = sys.argv[1]
         results.append(analyze_file(filepath))
 
-    # Summary table at the end - most useful when there's more than one result
+    # Summary table for batch search
     if len(results) > 1:
         print("=" * 60)
         print("SUMMARY")
         print("=" * 60)
-        # Sort highest risk first so the worst offenders are easy to spot
+        # higest risk first
         for filepath, score, verdict in sorted(
             results, key=lambda r: (r[1] is None, -(r[1] or 0))
         ):

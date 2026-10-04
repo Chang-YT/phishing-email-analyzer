@@ -1,158 +1,84 @@
-# Phishing Email Analyzer
+Phishing Email Analyzer - supports single-file analysis / batch scanning
 
-A Python tool that parses raw `.eml` files and produces a risk-scored report,
-based on authentication results (SPF/DKIM/DMARC), sender/reply-to mismatches,
-extracted URLs and domains, attachment risk, and urgency language. Supports
-single-file analysis or batch scanning of an entire folder.
+Python cmd tool that accept raw `.eml` files and generate a risk-scored report
+based on authentication results, sender/reply-to mismatches, extracted URLs and domains, attachment risk, and urgency language
 
-## Why I built this
 
-I wanted hands-on practice with the kind of triage a SOC analyst does on
-suspicious email: pulling apart headers, checking authentication results, and
-identifying indicators of compromise (IOCs) without executing anything
-dangerous. Rather than working from a tutorial dataset, I tested this against
-real, recent phishing and malspam samples from
-[malware-traffic-analysis.net](https://malware-traffic-analysis.net), a public
-repository of real-world malicious traffic used by security researchers.
+# dataset source
+**real-world email samples not included in this repository** 
+download samples directly from the website [malware-traffic-analysis.net](https://malware-traffic-analysis.net) a public repository providing real-world malicious traffic
+after download, place the extracted `.eml` files into the local `samples/` folder in this project
 
-## Features
+*note that:* never click on link or open attachments from a real-world malicious email you get !!! This tool only read text and headers and will never fetches URLs or opens attachment contents
+SOOOOOOO DO NOT OPEN THEM MANUALLY X_X
 
-- Parses raw `.eml` files (headers, body, attachments) using Python's
-  built-in `email` module — no external mail libraries required
-- Extracts and evaluates SPF / DKIM / DMARC results from the
-  `Authentication-Results` header
-- Flags From / Reply-To domain mismatches
-- Extracts URLs from **both** plain-text and HTML bodies, including links
-  hidden inside `href="..."` / `src="..."` attributes (see *Bugs found and
-  fixed*, below)
-- Extracts root domains from found URLs (`tldextract`)
-- Lists email attachments and flags risky file types (executables, scripts,
-  and archive formats like `.zip` / `.7z` / `.xz`, which are a common
-  malware delivery method)
-- Scans subject line and body text for urgency/pressure language
-- Produces a weighted 0–100 risk score with a plain-language explanation of
-  every point awarded
-- Batch mode: point it at a folder and get a full report per email plus a
-  ranked summary table
-
-## Usage
-
-```bash
-# Single file
-python analyze.py samples/sample.eml
-
-# Whole folder
-python analyze.py --folder samples
-```
-
-### Setup
-
-```bash
+# setup
 python -m venv venv
 venv\Scripts\activate        # Windows
-# source venv/bin/activate   # macOS/Linux
+source venv/bin/activate   # macOS/Linux
 pip install -r requirements.txt
-```
 
-## Example output
 
-```
-============================================================
-ANALYZING: 2025-05-12-email-with-malware-attachment-0845-UTC.eml
-============================================================
-From:      Sedra Al Jundi <cert@etsdc.com>
-Subject:   RE: Urgent: Confirmation Required for Invoice & Down Payment Details
-SPF:   softfail   DKIM:  none   DMARC: fail
-Urgency phrases found: ['urgent']
-Attachments found: ['etsdc.jpg', 'invoice_10988.xz [RISKY TYPE]']
-------------------------------------------------------------
-RISK SCORE: 85/100  ->  HIGH RISK
-```
+# single file analyze
+python analyze.py samples/sample.eml
 
-## Bugs found and fixed during testing
+# entire folder analyze
+python analyze.py --folder samples
 
-Testing against real samples (rather than synthetic test data) surfaced two
-real defects in the first version of the URL extractor:
 
-1. **HTML tag-stripping was deleting links before they could be found.**
-   The original body parser stripped `<tags>` with a regex *before* searching
-   for URLs. Since a real link lives inside the tag itself
-   (`<a href="http://evil.com">`), stripping the tag deleted the URL along
-   with it — the extractor was left with only the visible link text, never
-   the actual destination. Fixed by extracting `href=` / `src=` values from
-   the **raw** HTML first, and only stripping tags afterward for keyword
-   scanning.
+## features
 
-2. **Plain-text was preferred over HTML even when it lacked the payload.**
-   Some phishing emails put the real malicious link only in the HTML version
-   (as a styled button or image), while the plain-text version is empty,
-   generic, or contains a decoy. The original script only checked
-   `text/plain` if it existed at all, silently ignoring the HTML version's
-   link. Fixed by checking both parts and combining results.
+- parses raw `.eml` files (headers, body, attachments) using Python built-in `email` module
+- extracts + evaluates SPF / DKIM / DMARC results in the `Authentication-Results` header
+- flag out the From / Reply-To domain mismatches
+- extract URLs from plain-text and HTML body | including links hidden inside `href="..."` / `src="..."` attributes (see *bugs and fixes*)
+- extracts root domains from found URLs (`tldextract`)
+- list out email attachments and flags risky file types (executables, scripts, archive `.zip` / `.7z` / `.xz`)
+- subject line and body text are scanned for urgency/pressure language
+- final 0–100 risk score with explanation
+- batch analyze will generate report per email with one ranking summary table
 
-This is a good example of why testing tools like this against **real, messy
-samples** — not just clean synthetic examples — matters: both bugs produced
-zero errors, zero crashes, and confidently wrong (falsely low) results.
 
-## Key finding: authentication passing does not mean the sender is trustworthy
+# bugs and fixes
 
-The `2026-01-09 VIP Recovery` sample (a real malspam campaign, confirmed
-malicious) passed **SPF, DKIM, and DMARC** entirely. This scored it only
-30/100 (MEDIUM) on authentication alone — because the attacker owns and
-correctly configures the domain they're spoofing from. Authentication
-checks confirm a sender is who their own DNS says they are; they do **not**
-confirm the sender is safe. In this tool, it was the attachment-risk check
-(a `.7z` archive) — not the authentication check — that pushed the score
-into a meaningful risk range. This mirrors a real lesson in phishing
-detection: no single signal is sufficient on its own.
+1. HTML tag-stripping delete links before it got deteced
 
-## Known limitations
+   real link lives inside the tag (`<a href="http://evil.com">`)
+   stripping the tag will also delte the URL
+   leaving only the visible link text with no actual destination
+   
+   **Fixed by extracting `href=` / `src=` values from the raw HTML first and strip tags for keyword scanning only after that
 
-- **Urgency-language detection is English-only.** A real Japanese phishing
-  sample (brand impersonation of Yodobashi Camera, malicious `.cn` domain)
-  scored artificially low (10/100) because the keyword list doesn't cover
-  Japanese phrasing. This is a known gap, not a bug — see *Roadmap*.
-- **No live reputation checking.** Domains and URLs are extracted and
-  flagged for suspicious TLDs, but not yet checked against threat
-  intelligence sources like VirusTotal or AbuseIPDB.
-- **Attachment risk is based on file extension only.** The tool does not
-  open, execute, or scan attachment contents — it flags risk by filename/
-  extension alone, which a sufficiently disguised file could evade.
-- **Filename spoofing (double extensions, icon mismatch) is not detected.**
+2. plain-text choosen over HTML version even when it's lack of info
 
-## Roadmap
+   some phishing email only put the real malicious link in the HTML like a styled button or image
+   while the plain-text message is empty, general or might comes with decoy
+   The script in first version will only check if `text/plain` exist ignoring link hidden in HTML
 
-- [ ] VirusTotal / AbuseIPDB integration for domain and IP reputation scoring
-- [ ] Multi-language urgency/social-engineering keyword sets
-- [ ] JSON/CSV export of results for integration with other tools
-- [ ] Optional attachment hash extraction (SHA256) for IOC reporting without
-      opening the file
+   **Fixed by checking both `text/plain` and HTML
 
-## A note on sample data
 
-This tool was tested against real phishing and malspam samples sourced from
-[malware-traffic-analysis.net](https://malware-traffic-analysis.net), a
-well-known public resource used by security researchers and maintained by
-Brady Duncan. **Raw email samples are intentionally not included in this
-repository** — several contain links to live malicious infrastructure or
-sit alongside real malware attachments, and redistributing them is not
-appropriate for a public GitHub repo. To reproduce these results, download
-samples directly from the source site (each zip is password-protected per
-their standard convention) and place the extracted `.eml` files into a local
-`samples/` folder in this project — already excluded via `.gitignore`.
+# real case senario - authentication doesnt mean its safe
 
-**Handling note:** never click links or open attachments from these emails
-outside an isolated, disposable environment. This tool only reads text and
-headers — it never fetches URLs or opens attachment contents.
+the "2026-01-09 VIP Recovery" phishing email passed SPF, DKIM, and DMARC in the system, looking legitimate
+but those will only check if the sender controls the domain, it will not tell if the domain itself is trustworthy
+even with a common malware delivery file .7z attached in that email, which should be enough for a high score flag, 
+the final score for this sample is only 30/100
 
-## Tech stack
+after this case we know that-- a verified sender doesnt mean that its a safe sender, authentication checks itself cant make a accurate phishing detection system
 
-- Python 3.10+
-- `email` (standard library) — MIME parsing
-- `tldextract` — accurate root-domain extraction
-- `requests` — reserved for planned threat-intel API integration
+# limitation
 
-## Author's note
+1 language 
+ a Japanese phishing sample (brand impersonation of Yodobashi Camera, malicious `.cn` domain) showed low score (10/100) because the keyword list doesn't cover Japanese phrasing
 
-Built as a hands-on SOC/security-analyst portfolio project, alongside a
-companion IOC/threat-intelligence enrichment tool.
+2 static checking
+ domains and URLs were flagged as suspicious, but not yet get check on threat intelligence sources like VirusTotal or AbuseIPDB
+ 
+3 more detection signals
+single security check is not enough for accurate phishing detection
+adding in multiple signals, like the sender’s reputation, email content, links, attachments, and more
+
+4 unwrap_redirect function limitaion
+only unwraps the three specific formats(Google redirect wrapper,Cisco Secure Web Gateway, googleusercontent proxy image)
+will not check on other possible redirect service on the internet

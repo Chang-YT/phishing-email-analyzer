@@ -1,11 +1,16 @@
-"""
-Debug helper - inspects the MIME structure of an .eml file
-so we can see exactly what parts exist and what get_body_text()
-is actually pulling out.
+# debug
+# whats the MIME structure of .eml file, what parts exist? what get_body_text() is getting?
 
-Usage:
-    python debug_email.py sample.eml
 """
+Multipurpose Internet Mail Extensions - MIME
+text/plain
+text/html
+multipart/mixed
+application/pdf
+application/zip
+application/x-7z-compressed
+"""
+
 
 import sys
 from email import policy
